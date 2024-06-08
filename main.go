@@ -109,14 +109,34 @@ func handleReceivedMessage(message *events.Message) {
 	msg := message.Message
 	timestamp := message.Info.Timestamp
 
+	log.Printf("Received message from %s at %s", sender, timestamp.Format(time.RFC3339))
+
 	if msg.GetConversation() != "" {
-		fmt.Printf("Received message from %s: %s\n", sender, msg.GetConversation())
+		log.Printf("Conversation: %s\n", msg.GetConversation())
 		writeToCSV(sender, msg.GetConversation(), timestamp)
 	} else if msg.GetExtendedTextMessage() != nil {
-		fmt.Printf("Received extended text message from %s: %s\n", sender, msg.GetExtendedTextMessage().GetText())
+		log.Printf("Extended Text Message: %s\n", msg.GetExtendedTextMessage().GetText())
 		writeToCSV(sender, msg.GetExtendedTextMessage().GetText(), timestamp)
+	} else if msg.GetImageMessage() != nil {
+		log.Println("Received an image message")
+		// Handle the image message if needed
+	} else if msg.GetVideoMessage() != nil {
+		log.Println("Received a video message")
+		// Handle the video message if needed
+	} else if msg.GetDocumentMessage() != nil {
+		log.Println("Received a document message")
+		// Handle the document message if needed
+	} else if msg.GetAudioMessage() != nil {
+		log.Println("Received an audio message")
+		// Handle the audio message if needed
+	} else if msg.GetContactMessage() != nil {
+		log.Println("Received a contact message")
+		// Handle the contact message if needed
+	} else if msg.GetLocationMessage() != nil {
+		log.Println("Received a location message")
+		// Handle the location message if needed
 	} else {
-		fmt.Printf("Received a message from %s, but could not determine its type\n", sender)
+		log.Printf("Received an unhandled message type from %s\n", sender)
 	}
 }
 
