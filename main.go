@@ -3,12 +3,14 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/csv"
 	"encoding/json"
 	"fmt"
 	"image/png"
 	"log"
 	"net/http"
 	"os"
+	"sync"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -25,7 +27,11 @@ import (
 	logrus "github.com/sirupsen/logrus"
 )
 
-var client *whatsmeow.Client
+var (
+	client      *whatsmeow.Client
+	csvFilePath = "messages.csv"
+	csvMutex    sync.Mutex
+)
 
 func main() {
 	// Setup logging
@@ -92,6 +98,7 @@ func main() {
 	router.POST("/send", sendMessageHandler)
 	router.GET("/qr/text", generateQRTextHandler)   // Add QR code text endpoint
 	router.GET("/qr/photo", generateQRPhotoHandler) // Add QR code photo endpoint
+	router.GET("/csv", getCSVContentsHandler)       // Add endpoint to get CSV contents
 	log.Println("Starting server on port 8080")
 	router.Run(":8080")
 }
@@ -100,11 +107,14 @@ func main() {
 func handleReceivedMessage(message *events.Message) {
 	sender := message.Info.Sender.String()
 	msg := message.Message
+	timestamp := message.Info.Timestamp
 
 	if msg.GetConversation() != "" {
 		fmt.Printf("Received message from %s: %s\n", sender, msg.GetConversation())
+		writeToCSV(sender, msg.GetConversation(), timestamp)
 	} else if msg.GetExtendedTextMessage() != nil {
 		fmt.Printf("Received extended text message from %s: %s\n", sender, msg.GetExtendedTextMessage().GetText())
+		writeToCSV(sender, msg.GetExtendedTextMessage().GetText(), timestamp)
 	} else {
 		fmt.Printf("Received a message from %s, but could not determine its type\n", sender)
 	}
@@ -125,6 +135,10 @@ func sendMessage(client *whatsmeow.Client, jid string, text string) error {
 		return err
 	}
 	fmt.Println("Message sent, ID:", msgID)
+
+	// Записываем отправленное сообщение в CSV
+	writeToCSV("me", text, time.Now())
+
 	return nil
 }
 
@@ -228,4 +242,64 @@ func generateQRPhotoHandler(c *gin.Context) {
 
 	c.Header("Content-Type", "image/png")
 	c.Writer.Write(pngBuffer.Bytes())
+}
+
+// Function to write a message to the CSV file
+func writeToCSV(sender string, message string, timestamp time.Time) {
+	csvMutex.Lock()
+	defer csvMutex.Unlock()
+
+	// Create file if it doesn't exist and open it in append mode
+	file, err := os.OpenFile(csvFilePath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	if err != nil {
+		log.Printf("Failed to open CSV file: %v", err)
+		return
+	}
+	defer file.Close()
+
+	writer := csv.NewWriter(file)
+	defer writer.Flush()
+
+	// Check if the file is empty to write headers
+	info, err := file.Stat()
+	if err != nil {
+		log.Printf("Failed to get file info: %v", err)
+		return
+	}
+
+	if info.Size() == 0 {
+		// Write headers
+		err = writer.Write([]string{"id", "phone", "text", "datetime"})
+		if err != nil {
+			log.Printf("Failed to write headers to CSV file: %v", err)
+			return
+		}
+	}
+
+	// Write message to CSV
+	err = writer.Write([]string{fmt.Sprintf("%d", time.Now().UnixNano()), sender, message, timestamp.Format(time.RFC3339)})
+	if err != nil {
+		log.Printf("Failed to write to CSV file: %v", err)
+	}
+}
+
+// Handler to get CSV contents
+func getCSVContentsHandler(c *gin.Context) {
+	file, err := os.Open(csvFilePath)
+	if err != nil {
+		log.Printf("Failed to open CSV file: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to open CSV file"})
+		return
+	}
+	defer file.Close()
+
+	reader := csv.NewReader(file)
+	records, err := reader.ReadAll()
+	if err != nil {
+		log.Printf("Failed to read CSV file: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to read CSV file"})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"data": records})
 }
