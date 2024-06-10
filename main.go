@@ -107,36 +107,91 @@ func main() {
 func handleReceivedMessage(message *events.Message) {
 	sender := message.Info.Sender.String()
 	msg := message.Message
-	timestamp := message.Info.Timestamp
+	timestamp := message.Info.Timestamp.Format(time.RFC3339) // Format the timestamp
 
-	log.Printf("Received message from %s at %s", sender, timestamp.Format(time.RFC3339))
+	log.Printf("Received message from %s at %s", sender, timestamp)
 
 	if msg.GetConversation() != "" {
-		log.Printf("Conversation: %s\n", msg.GetConversation())
-		writeToCSV(sender, msg.GetConversation(), timestamp)
-	} else if msg.GetExtendedTextMessage() != nil {
-		log.Printf("Extended Text Message: %s\n", msg.GetExtendedTextMessage().GetText())
-		writeToCSV(sender, msg.GetExtendedTextMessage().GetText(), timestamp)
-	} else if msg.GetImageMessage() != nil {
+		conversation := msg.GetConversation()
+		log.Printf("Conversation: %s\n", conversation)
+		writeToCSV(sender, "Conversation", conversation, timestamp)
+
+	} else if extendedText := msg.GetExtendedTextMessage(); extendedText != nil {
+		extendedTextMsg := extendedText.GetText()
+		log.Printf("Extended Text Message: %s\n", extendedTextMsg)
+		writeToCSV(sender, "ExtendedText", extendedTextMsg, timestamp)
+
+	} else if imageMessage := msg.GetImageMessage(); imageMessage != nil {
+		caption := imageMessage.GetCaption()
+		imageData, err := client.Download(imageMessage) // Correctly download image data
+		if err != nil {
+			log.Printf("Failed to download image data: %v", err)
+			return
+		}
 		log.Println("Received an image message")
-		// Handle the image message if needed
-	} else if msg.GetVideoMessage() != nil {
+		imagePath, err := saveMedia("image", imageData)
+		if err != nil {
+			log.Printf("Failed to save image: %v", err)
+			return
+		}
+		writeToCSV(sender, "Image", fmt.Sprintf("Caption: %s, Path: %s", caption, imagePath), timestamp)
+	} else if videoMessage := msg.GetVideoMessage(); videoMessage != nil {
+		caption := videoMessage.GetCaption()
+		videoData, err := client.Download(videoMessage) // Correctly download video data
+		if err != nil {
+			log.Printf("Failed to download video data: %v", err)
+			return
+		}
 		log.Println("Received a video message")
-		// Handle the video message if needed
-	} else if msg.GetDocumentMessage() != nil {
+		videoPath, err := saveMedia("video", videoData)
+		if err != nil {
+			log.Printf("Failed to save video: %v", err)
+			return
+		}
+		writeToCSV(sender, "Video", fmt.Sprintf("Caption: %s, Path: %s", caption, videoPath), timestamp)
+
+	} else if documentMessage := msg.GetDocumentMessage(); documentMessage != nil {
+		fileName := documentMessage.GetFileName()
+		documentData, err := client.Download(documentMessage) // Correctly download document data
+		if err != nil {
+			log.Printf("Failed to download document data: %v", err)
+			return
+		}
 		log.Println("Received a document message")
-		// Handle the document message if needed
-	} else if msg.GetAudioMessage() != nil {
+		documentPath, err := saveMedia("document", documentData)
+		if err != nil {
+			log.Printf("Failed to save document: %v", err)
+			return
+		}
+		writeToCSV(sender, "Document", fmt.Sprintf("FileName: %s, Path: %s", fileName, documentPath), timestamp)
+
+	} else if audioMessage := msg.GetAudioMessage(); audioMessage != nil {
+		audioData, err := client.Download(audioMessage) // Correctly download audio data
+		if err != nil {
+			log.Printf("Failed to download audio data: %v", err)
+			return
+		}
 		log.Println("Received an audio message")
-		// Handle the audio message if needed
-	} else if msg.GetContactMessage() != nil {
+		audioPath, err := saveMedia("audio", audioData)
+		if err != nil {
+			log.Printf("Failed to save audio: %v", err)
+			return
+		}
+		writeToCSV(sender, "Audio", audioPath, timestamp)
+
+	} else if contactMessage := msg.GetContactMessage(); contactMessage != nil {
+		contactName := contactMessage.GetDisplayName()
 		log.Println("Received a contact message")
-		// Handle the contact message if needed
-	} else if msg.GetLocationMessage() != nil {
+		writeToCSV(sender, "Contact", contactName, timestamp)
+
+	} else if locationMessage := msg.GetLocationMessage(); locationMessage != nil {
+		location := fmt.Sprintf("Lat: %f, Long: %f", locationMessage.GetDegreesLatitude(), locationMessage.GetDegreesLongitude())
 		log.Println("Received a location message")
-		// Handle the location message if needed
+		writeToCSV(sender, "Location", location, timestamp)
+
 	} else {
 		log.Printf("Received an unhandled message type from %s\n", sender)
+		writeToCSV(sender, "Unknown", "Unknown message type", timestamp)
 	}
 }
 
@@ -156,8 +211,10 @@ func sendMessage(client *whatsmeow.Client, jid string, text string) error {
 	}
 	fmt.Println("Message sent, ID:", msgID)
 
+	// Format the current time for CSV logging
+	timestamp := time.Now().Format(time.RFC3339)
 	// Записываем отправленное сообщение в CSV
-	writeToCSV("me", text, time.Now())
+	writeToCSV("me", "SentMessage", text, timestamp)
 
 	return nil
 }
@@ -178,7 +235,7 @@ func sendMessageHandler(c *gin.Context) {
 	err := sendMessage(client, request.JID, request.Text)
 	if err != nil {
 		log.Println("Failed to send message:", err)
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err})
 		return
 	}
 
@@ -265,7 +322,7 @@ func generateQRPhotoHandler(c *gin.Context) {
 }
 
 // Function to write a message to the CSV file
-func writeToCSV(sender string, message string, timestamp time.Time) {
+func writeToCSV(sender string, messageType string, message string, timestamp string) {
 	csvMutex.Lock()
 	defer csvMutex.Unlock()
 
@@ -289,7 +346,7 @@ func writeToCSV(sender string, message string, timestamp time.Time) {
 
 	if info.Size() == 0 {
 		// Write headers
-		err = writer.Write([]string{"id", "phone", "text", "datetime"})
+		err = writer.Write([]string{"id", "phone", "type", "text", "datetime"})
 		if err != nil {
 			log.Printf("Failed to write headers to CSV file: %v", err)
 			return
@@ -297,7 +354,7 @@ func writeToCSV(sender string, message string, timestamp time.Time) {
 	}
 
 	// Write message to CSV
-	err = writer.Write([]string{fmt.Sprintf("%d", time.Now().UnixNano()), sender, message, timestamp.Format(time.RFC3339)})
+	err = writer.Write([]string{fmt.Sprintf("%d", time.Now().UnixNano()), sender, messageType, message, timestamp})
 	if err != nil {
 		log.Printf("Failed to write to CSV file: %v", err)
 	}
@@ -322,4 +379,39 @@ func getCSVContentsHandler(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{"data": records})
+}
+
+// Function to save media files
+func saveMedia(mediaType string, mediaData []byte) (string, error) {
+	// Define the directory and filename based on the media type and current timestamp
+	dir := fmt.Sprintf("media/%s", mediaType)
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		log.Printf("Failed to create directory: %v", err)
+		return "", err
+	}
+	var extension string
+	switch mediaType {
+	case "image":
+		extension = ".jpg" // or ".png", depending on your use case
+	case "video":
+		extension = ".mp4"
+	case "audio":
+		extension = ".ogg" // or ".mp3", depending on your use case
+	case "document":
+		extension = ".pdf" // or any other relevant extension
+	default:
+		extension = ""
+	}
+
+	filename := fmt.Sprintf("%s/%d%s", dir, time.Now().UnixNano(), extension)
+
+	// Write the media data to the file
+	err := os.WriteFile(filename, mediaData, 0644)
+	if err != nil {
+		log.Printf("Failed to save media file: %v", err)
+		return "", err
+	}
+
+	log.Printf("Saved media file: %s", filename) // Log the path of the saved file
+	return filename, nil
 }
